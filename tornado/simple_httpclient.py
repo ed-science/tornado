@@ -168,12 +168,11 @@ class SimpleAsyncHTTPClient(AsyncHTTPClient):
         assert request.request_timeout is not None
         timeout_handle = None
         if len(self.active) >= self.max_clients:
-            timeout = (
+            if timeout := (
                 min(request.connect_timeout, request.request_timeout)
                 or request.connect_timeout
                 or request.request_timeout
-            )  # min but skip zero
-            if timeout:
+            ):
                 timeout_handle = self.io_loop.add_timeout(
                     self.io_loop.time() + timeout,
                     functools.partial(self._on_timeout, key, "in request queue"),
@@ -291,7 +290,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
         try:
             self.parsed = urllib.parse.urlsplit(_unicode(self.request.url))
             if self.parsed.scheme not in ("http", "https"):
-                raise ValueError("Unsupported url scheme: %s" % self.request.url)
+                raise ValueError(f"Unsupported url scheme: {self.request.url}")
             # urlsplit results have hostname and port results, but they
             # didn't support ipv6 literals until python 2.7.
             netloc = self.parsed.netloc
@@ -305,11 +304,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
                 host = host[1:-1]
             self.parsed_hostname = host  # save final host for _on_connect
 
-            if self.request.allow_ipv6 is False:
-                af = socket.AF_INET
-            else:
-                af = socket.AF_UNSPEC
-
+            af = socket.AF_INET if self.request.allow_ipv6 is False else socket.AF_UNSPEC
             ssl_options = self._get_ssl_options(self.parsed.scheme)
 
             source_ip = None
@@ -364,7 +359,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
                 self.request.method not in self._SUPPORTED_METHODS
                 and not self.request.allow_nonstandard_methods
             ):
-                raise KeyError("unknown method %s" % self.request.method)
+                raise KeyError(f"unknown method {self.request.method}")
             for key in (
                 "proxy_host",
                 "proxy_port",
@@ -373,7 +368,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
                 "proxy_auth_mode",
             ):
                 if getattr(self.request, key, None):
-                    raise NotImplementedError("%s not supported" % key)
+                    raise NotImplementedError(f"{key} not supported")
             if "Connection" not in self.request.headers:
                 self.request.headers["Connection"] = "close"
             if "Host" not in self.request.headers:
@@ -393,31 +388,24 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
                 assert password is not None
                 if self.request.auth_mode not in (None, "basic"):
                     raise ValueError("unsupported auth_mode %s", self.request.auth_mode)
-                self.request.headers["Authorization"] = "Basic " + _unicode(
-                    base64.b64encode(
-                        httputil.encode_username_password(username, password)
-                    )
-                )
+                self.request.headers[
+                    "Authorization"
+                ] = f"Basic {_unicode(base64.b64encode(httputil.encode_username_password(username, password)))}"
             if self.request.user_agent:
                 self.request.headers["User-Agent"] = self.request.user_agent
             elif self.request.headers.get("User-Agent") is None:
-                self.request.headers["User-Agent"] = "Tornado/{}".format(version)
+                self.request.headers["User-Agent"] = f"Tornado/{version}"
             if not self.request.allow_nonstandard_methods:
-                # Some HTTP methods nearly always have bodies while others
-                # almost never do. Fail in this case unless the user has
-                # opted out of sanity checks with allow_nonstandard_methods.
-                body_expected = self.request.method in ("POST", "PATCH", "PUT")
                 body_present = (
                     self.request.body is not None
                     or self.request.body_producer is not None
                 )
+                body_expected = self.request.method in ("POST", "PATCH", "PUT")
                 if (body_expected and not body_present) or (
                     body_present and not body_expected
                 ):
                     raise ValueError(
-                        "Body must %sbe None for method %s (unless "
-                        "allow_nonstandard_methods is true)"
-                        % ("not " if body_expected else "", self.request.method)
+                        f'Body must {"not " if body_expected else ""}be None for method {self.request.method} (unless allow_nonstandard_methods is true)'
                     )
             if self.request.expect_100_continue:
                 self.request.headers["Expect"] = "100-continue"
@@ -435,7 +423,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
             if self.request.decompress_response:
                 self.request.headers["Accept-Encoding"] = "gzip"
             req_path = (self.parsed.path or "/") + (
-                ("?" + self.parsed.query) if self.parsed.query else ""
+                f"?{self.parsed.query}" if self.parsed.query else ""
             )
             self.connection = self._create_connection(stream)
             start_line = httputil.RequestStartLine(self.request.method, req_path, "")
@@ -451,33 +439,33 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
     def _get_ssl_options(
         self, scheme: str
     ) -> Union[None, Dict[str, Any], ssl.SSLContext]:
-        if scheme == "https":
-            if self.request.ssl_options is not None:
-                return self.request.ssl_options
-            # If we are using the defaults, don't construct a
-            # new SSLContext.
-            if (
-                self.request.validate_cert
-                and self.request.ca_certs is None
-                and self.request.client_cert is None
-                and self.request.client_key is None
-            ):
-                return _client_ssl_defaults
-            ssl_ctx = ssl.create_default_context(
-                ssl.Purpose.SERVER_AUTH, cafile=self.request.ca_certs
+        if scheme != "https":
+            return None
+        if self.request.ssl_options is not None:
+            return self.request.ssl_options
+        # If we are using the defaults, don't construct a
+        # new SSLContext.
+        if (
+            self.request.validate_cert
+            and self.request.ca_certs is None
+            and self.request.client_cert is None
+            and self.request.client_key is None
+        ):
+            return _client_ssl_defaults
+        ssl_ctx = ssl.create_default_context(
+            ssl.Purpose.SERVER_AUTH, cafile=self.request.ca_certs
+        )
+        if not self.request.validate_cert:
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        if self.request.client_cert is not None:
+            ssl_ctx.load_cert_chain(
+                self.request.client_cert, self.request.client_key
             )
-            if not self.request.validate_cert:
-                ssl_ctx.check_hostname = False
-                ssl_ctx.verify_mode = ssl.CERT_NONE
-            if self.request.client_cert is not None:
-                ssl_ctx.load_cert_chain(
-                    self.request.client_cert, self.request.client_key
-                )
-            if hasattr(ssl, "OP_NO_COMPRESSION"):
-                # See netutil.ssl_options_to_context
-                ssl_ctx.options |= ssl.OP_NO_COMPRESSION
-            return ssl_ctx
-        return None
+        if hasattr(ssl, "OP_NO_COMPRESSION"):
+            # See netutil.ssl_options_to_context
+            ssl_ctx.options |= ssl.OP_NO_COMPRESSION
+        return ssl_ctx
 
     def _on_timeout(self, info: Optional[str] = None) -> None:
         """Timeout callback of _HTTPConnection instance.
@@ -500,7 +488,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
 
     def _create_connection(self, stream: IOStream) -> HTTP1Connection:
         stream.set_nodelay(True)
-        connection = HTTP1Connection(
+        return HTTP1Connection(
             stream,
             True,
             HTTP1ConnectionParameters(
@@ -511,7 +499,6 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
             ),
             self._sockaddr,
         )
-        return connection
 
     async def _write_body(self, start_read: bool) -> None:
         if self.request.body is not None:

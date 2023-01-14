@@ -131,8 +131,8 @@ class SecureCookieV1Test(unittest.TestCase):
         cookie = handler._cookies["foo"]
         match = re.match(rb"12345678\|([0-9]+)\|([0-9a-f]+)", cookie)
         assert match is not None
-        timestamp = match.group(1)
-        sig = match.group(2)
+        timestamp = match[1]
+        sig = match[2]
         self.assertEqual(
             _create_signature_v1(
                 handler.application.settings["cookie_secret"],
@@ -156,7 +156,7 @@ class SecureCookieV1Test(unittest.TestCase):
         )
         # tamper with the cookie
         handler._cookies["foo"] = utf8(
-            "1234|5678%s|%s" % (to_basestring(timestamp), to_basestring(sig))
+            f"1234|5678{to_basestring(timestamp)}|{to_basestring(sig)}"
         )
         # it gets rejected
         with ExpectLog(gen_log, "Cookie timestamp in future"):
@@ -608,7 +608,7 @@ class TypeCheckHandler(RequestHandler):
     def check_type(self, name, obj, expected_type):
         actual_type = type(obj)
         if expected_type != actual_type:
-            self.errors[name] = "expected %s, got %s" % (expected_type, actual_type)
+            self.errors[name] = f"expected {expected_type}, got {actual_type}"
 
 
 class DecodeArgHandler(RequestHandler):
@@ -748,7 +748,7 @@ class WSGISafeWebTest(WebTestCase):
         RequestHandler._template_loaders.clear()
 
     def get_handlers(self):
-        urls = [
+        return [
             url("/typecheck/(.*)", TypeCheckHandler, name="typecheck"),
             url("/decode_arg/(.*)", DecodeArgHandler, name="decode_arg"),
             url("/decode_arg_kw/(?P<arg>.*)", DecodeArgHandler),
@@ -776,7 +776,6 @@ class WSGISafeWebTest(WebTestCase):
             url("/get_argument", GetArgumentHandler),
             url("/get_arguments", GetArgumentsHandler),
         ]
-        return urls
 
     def fetch_json(self, *args, **kwargs):
         response = self.fetch(*args, **kwargs)
@@ -788,7 +787,7 @@ class WSGISafeWebTest(WebTestCase):
             create_signed_value(self.COOKIE_SECRET, "asdf", "qwer")
         )
         response = self.fetch(
-            "/typecheck/asdf?foo=bar", headers={"Cookie": "asdf=" + cookie_value}
+            "/typecheck/asdf?foo=bar", headers={"Cookie": f"asdf={cookie_value}"}
         )
         data = json_decode(response.body)
         self.assertEqual(data, {})
@@ -796,7 +795,7 @@ class WSGISafeWebTest(WebTestCase):
         response = self.fetch(
             "/typecheck/asdf?foo=bar",
             method="POST",
-            headers={"Cookie": "asdf=" + cookie_value},
+            headers={"Cookie": f"asdf={cookie_value}"},
             body="foo=bar",
         )
 
@@ -971,7 +970,7 @@ js_embed()
         )
         self.assertEqual(response.body, b"")
 
-        body = urllib.parse.urlencode(dict())
+        body = urllib.parse.urlencode({})
         response = self.fetch(
             "/get_argument?source=body&foo=hello", method="POST", body=body
         )
@@ -994,11 +993,14 @@ class NonWSGIWebTests(WebTestCase):
 
 class ErrorResponseTest(WebTestCase):
     def get_handlers(self):
+
         class DefaultHandler(RequestHandler):
             def get(self):
                 if self.get_argument("status", None):
                     raise HTTPError(int(self.get_argument("status")))
                 1 / 0
+
+
 
         class WriteErrorHandler(RequestHandler):
             def get(self):
@@ -1010,9 +1012,10 @@ class ErrorResponseTest(WebTestCase):
             def write_error(self, status_code, **kwargs):
                 self.set_header("Content-Type", "text/plain")
                 if "exc_info" in kwargs:
-                    self.write("Exception: %s" % kwargs["exc_info"][0].__name__)
+                    self.write(f'Exception: {kwargs["exc_info"][0].__name__}')
                 else:
                     self.write("Status: %d" % status_code)
+
 
         class FailedWriteErrorHandler(RequestHandler):
             def get(self):
@@ -1068,6 +1071,7 @@ class StaticFileTest(WebTestCase):
     static_dir = os.path.join(os.path.dirname(__file__), "static")
 
     def get_handlers(self):
+
         class StaticUrlHandler(RequestHandler):
             def get(self, path):
                 with_v = int(self.get_argument("include_version", "1"))
@@ -1075,6 +1079,8 @@ class StaticFileTest(WebTestCase):
 
         class AbsoluteStaticUrlHandler(StaticUrlHandler):
             include_host = True
+
+
 
         class OverrideStaticUrlHandler(RequestHandler):
             def get(self, path):
@@ -1086,7 +1092,7 @@ class StaticFileTest(WebTestCase):
                 if override_url == regular_url:
                     return self.write(str(False))
 
-                protocol = self.request.protocol + "://"
+                protocol = f"{self.request.protocol}://"
                 protocol_length = len(protocol)
                 check_regular = regular_url.find(protocol, 0, protocol_length)
                 check_override = override_url.find(protocol, 0, protocol_length)
@@ -1096,6 +1102,7 @@ class StaticFileTest(WebTestCase):
                 else:
                     result = check_override == -1 and check_regular == 0
                 self.write(str(result))
+
 
         return [
             ("/static_url/(.*)", StaticUrlHandler),
@@ -1125,7 +1132,7 @@ class StaticFileTest(WebTestCase):
         # make sure the uncompressed file still has the correct type
         response = self.fetch("/static/sample.xml")
         self.assertTrue(
-            response.headers.get("Content-Type") in set(("text/xml", "application/xml"))
+            response.headers.get("Content-Type") in {"text/xml", "application/xml"}
         )
 
     def test_static_url(self):
@@ -1164,16 +1171,16 @@ class StaticFileTest(WebTestCase):
         """
         head_response = self.fetch(*args, method="HEAD", **kwargs)
         get_response = self.fetch(*args, method="GET", **kwargs)
-        content_headers = set()
-        for h in itertools.chain(head_response.headers, get_response.headers):
-            if h.startswith("Content-"):
-                content_headers.add(h)
+        content_headers = {
+            h
+            for h in itertools.chain(head_response.headers, get_response.headers)
+            if h.startswith("Content-")
+        }
         for h in content_headers:
             self.assertEqual(
                 head_response.headers.get(h),
                 get_response.headers.get(h),
-                "%s differs between GET (%s) and HEAD (%s)"
-                % (h, head_response.headers.get(h), get_response.headers.get(h)),
+                f"{h} differs between GET ({head_response.headers.get(h)}) and HEAD ({get_response.headers.get(h)})",
             )
         return get_response
 
@@ -1399,7 +1406,7 @@ class StaticFileTest(WebTestCase):
         path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "static/robots.txt"
         )
-        response = self.get_and_head("/root_static" + urllib.parse.quote(path))
+        response = self.get_and_head(f"/root_static{urllib.parse.quote(path)}")
         self.assertEqual(response.code, 200)
 
 
@@ -1441,6 +1448,9 @@ class StaticFileWithPathTest(WebTestCase):
 
 class CustomStaticFileTest(WebTestCase):
     def get_handlers(self):
+
+
+
         class MyStaticFileHandler(StaticFileHandler):
             @classmethod
             def make_static_url(cls, settings, path):
@@ -1448,26 +1458,22 @@ class CustomStaticFileTest(WebTestCase):
                 extension_index = path.rindex(".")
                 before_version = path[:extension_index]
                 after_version = path[(extension_index + 1) :]
-                return "/static/%s.%s.%s" % (
-                    before_version,
-                    version_hash,
-                    after_version,
-                )
+                return f"/static/{before_version}.{version_hash}.{after_version}"
 
             def parse_url_path(self, url_path):
                 extension_index = url_path.rindex(".")
                 version_index = url_path.rindex(".", 0, extension_index)
-                return "%s%s" % (url_path[:version_index], url_path[extension_index:])
+                return f"{url_path[:version_index]}{url_path[extension_index:]}"
 
             @classmethod
             def get_absolute_path(cls, settings, path):
-                return "CustomStaticFileTest:" + path
+                return f"CustomStaticFileTest:{path}"
 
             def validate_absolute_path(self, root, absolute_path):
                 return absolute_path
 
             @classmethod
-            def get_content(self, path, start=None, end=None):
+            def get_content(cls, path, start=None, end=None):
                 assert start is None and end is None
                 if path == "CustomStaticFileTest:foo.txt":
                     return b"bar"
@@ -1484,6 +1490,7 @@ class CustomStaticFileTest(WebTestCase):
             @classmethod
             def get_version(cls, settings, path):
                 return "42"
+
 
         class StaticUrlHandler(RequestHandler):
             def get(self, path):
@@ -1914,14 +1921,14 @@ class UIMethodUIModuleTest(SimpleHandlerTestCase):
 
     def get_app_kwargs(self):
         def my_ui_method(handler, x):
-            return "In my_ui_method(%s) with handler value %s." % (x, handler.value())
+            return f"In my_ui_method({x}) with handler value {handler.value()}."
+
+
 
         class MyModule(UIModule):
             def render(self, x):
-                return "In MyModule(%s) with handler value %s." % (
-                    x,
-                    typing.cast(UIMethodUIModuleTest.Handler, self.handler).value(),
-                )
+                return f"In MyModule({x}) with handler value {typing.cast(UIMethodUIModuleTest.Handler, self.handler).value()}."
+
 
         loader = DictLoader(
             {"foo.html": "{{ my_ui_method(42) }} {% module MyModule(123) %}"}
@@ -1976,7 +1983,7 @@ class SetLazyPropertiesTest(SimpleHandlerTestCase):
             raise NotImplementedError()
 
         def get(self):
-            self.write("Hello %s (%s)" % (self.current_user, self.locale.code))
+            self.write(f"Hello {self.current_user} ({self.locale.code})")
 
     def test_set_properties(self):
         # Ensure that current_user can be assigned to normally for apps
@@ -2338,7 +2345,7 @@ class BaseFlowControlHandler(RequestHandler):
     @contextlib.contextmanager
     def in_method(self, method):
         if self.method is not None:
-            self.test.fail("entered method %s while in %s" % (method, self.method))
+            self.test.fail(f"entered method {method} while in {self.method}")
         self.method = method
         self.methods.append(method)
         try:
@@ -2623,8 +2630,11 @@ class SignedValueTest(unittest.TestCase):
         sig = "3d4e60b996ff9c5d5788e333a0cba6f238a22c6c0f94788870e1a9ecd482e152"
 
         def validate(prefix):
-            return b"value" == decode_signed_value(
-                SignedValueTest.SECRET, "key", prefix + sig, clock=self.present
+            return (
+                decode_signed_value(
+                    SignedValueTest.SECRET, "key", prefix + sig, clock=self.present
+                )
+                == b"value"
             )
 
         self.assertTrue(validate("2|1:0|10:1300000000|3:key|8:dmFsdWU=|"))
@@ -2639,8 +2649,11 @@ class SignedValueTest(unittest.TestCase):
         prefix = "2|1:0|10:1300000000|3:key|8:dmFsdWU=|"
 
         def validate(sig):
-            return b"value" == decode_signed_value(
-                SignedValueTest.SECRET, "key", prefix + sig, clock=self.present
+            return (
+                decode_signed_value(
+                    SignedValueTest.SECRET, "key", prefix + sig, clock=self.present
+                )
+                == b"value"
             )
 
         self.assertTrue(
@@ -2736,10 +2749,7 @@ class XSRFTest(SimpleHandlerTestCase):
         self.xsrf_token = self.get_token()
 
     def get_token(self, old_token=None, version=None):
-        if old_token is not None:
-            headers = self.cookie_headers(old_token)
-        else:
-            headers = None
+        headers = self.cookie_headers(old_token) if old_token is not None else None
         response = self.fetch(
             "/" if version is None else ("/?version=%d" % version), headers=headers
         )
@@ -2749,7 +2759,7 @@ class XSRFTest(SimpleHandlerTestCase):
     def cookie_headers(self, token=None):
         if token is None:
             token = self.xsrf_token
-        return {"Cookie": "_xsrf=" + token}
+        return {"Cookie": f"_xsrf={token}"}
 
     def test_xsrf_fail_no_token(self):
         with ExpectLog(gen_log, ".*'_xsrf' argument missing"):
@@ -2821,7 +2831,7 @@ class XSRFTest(SimpleHandlerTestCase):
 
     def test_xsrf_success_query_string(self):
         response = self.fetch(
-            "/?" + urllib.parse.urlencode(dict(_xsrf=self.xsrf_token)),
+            f"/?{urllib.parse.urlencode(dict(_xsrf=self.xsrf_token))}",
             method="POST",
             body=b"",
             headers=self.cookie_headers(),
@@ -2843,9 +2853,7 @@ class XSRFTest(SimpleHandlerTestCase):
     def test_distinct_tokens(self):
         # Every request gets a distinct token.
         NUM_TOKENS = 10
-        tokens = set()
-        for i in range(NUM_TOKENS):
-            tokens.add(self.get_token())
+        tokens = {self.get_token() for _ in range(NUM_TOKENS)}
         self.assertEqual(len(tokens), NUM_TOKENS)
 
     def test_cross_user(self):
@@ -2875,12 +2883,12 @@ class XSRFTest(SimpleHandlerTestCase):
 
     def test_refresh_token(self):
         token = self.xsrf_token
-        tokens_seen = set([token])
+        tokens_seen = {token}
         # A user's token is stable over time.  Refreshing the page in one tab
         # might update the cookie while an older tab still has the old cookie
         # in its DOM.  Simulate this scenario by passing a constant token
         # in the body and re-querying for the token.
-        for i in range(5):
+        for _ in range(5):
             token = self.get_token(token)
             # Tokens are encoded uniquely each time
             tokens_seen.add(token)
@@ -2899,7 +2907,7 @@ class XSRFTest(SimpleHandlerTestCase):
 
         # Refreshed v1 tokens are all identical.
         v1_token = self.get_token(version=1)
-        for i in range(5):
+        for _ in range(5):
             self.assertEqual(self.get_token(v1_token, version=1), v1_token)
 
         # Upgrade to a v2 version of the same token
@@ -2952,9 +2960,8 @@ class FinishExceptionTest(SimpleHandlerTestCase):
             self.set_header("WWW-Authenticate", 'Basic realm="something"')
             if self.get_argument("finish_value", ""):
                 raise Finish("authentication required")
-            else:
-                self.write("authentication required")
-                raise Finish()
+            self.write("authentication required")
+            raise Finish()
 
     def test_finish_exception(self):
         for u in ["/", "/?finish_value=1"]:
@@ -3057,7 +3064,7 @@ class CacheTest(WebTestCase):
 
     def _test_etag(self, computed_etag, etags, status_code):
         response = self.fetch(
-            "/etag/" + computed_etag, headers={"If-None-Match": etags}
+            f"/etag/{computed_etag}", headers={"If-None-Match": etags}
         )
         self.assertEqual(response.code, status_code)
 
@@ -3106,14 +3113,11 @@ class URLSpecReverseTest(unittest.TestCase):
         for path in paths:
             # A URLSpec can still be created even if it cannot be reversed.
             url_spec = url(path, None)
-            try:
+            with contextlib.suppress(ValueError):
                 result = url_spec.reverse()
                 self.fail(
-                    "did not get expected exception when reversing %s. "
-                    "result: %s" % (path, result)
+                    f"did not get expected exception when reversing {path}. result: {result}"
                 )
-            except ValueError:
-                pass
 
     def test_reverse_arguments(self):
         self.assertEqual(
