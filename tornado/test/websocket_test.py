@@ -167,14 +167,12 @@ class SubprotocolHandler(TestWebSocketHandler):
         if self.select_subprotocol_called:
             raise Exception("select_subprotocol called twice")
         self.select_subprotocol_called = True
-        if "goodproto" in subprotocols:
-            return "goodproto"
-        return None
+        return "goodproto" if "goodproto" in subprotocols else None
 
     def open(self):
         if not self.select_subprotocol_called:
             raise Exception("select_subprotocol not called")
-        self.write_message("subprotocol=%s" % self.selected_subprotocol)
+        self.write_message(f"subprotocol={self.selected_subprotocol}")
 
 
 class OpenCoroutineHandler(TestWebSocketHandler):
@@ -545,7 +543,7 @@ class WebSocketTest(WebSocketBaseTestCase):
         # server is only running on ipv4. Test for this edge case and skip
         # the test if it happens.
         addrinfo = yield Resolver().resolve("localhost", port)
-        families = set(addr[0] for addr in addrinfo)
+        families = {addr[0] for addr in addrinfo}
         if socket.AF_INET not in families:
             self.skipTest("localhost does not resolve to ipv4")
             return
@@ -679,7 +677,7 @@ class CompressionTestMixin(object):
         )
         # Send the same message three times so we can measure the
         # effect of the context_takeover options.
-        for i in range(3):
+        for _ in range(3):
             ws.write_message(self.MESSAGE)
             response = yield ws.read_message()
             self.assertEqual(response, self.MESSAGE)
@@ -786,7 +784,7 @@ class ServerPeriodicPingTest(WebSocketBaseTestCase):
     @gen_test
     def test_server_ping(self):
         ws = yield self.ws_connect("/")
-        for i in range(3):
+        for _ in range(3):
             response = yield ws.read_message()
             self.assertEqual(response, "got pong")
         # TODO: test that the connection gets closed if ping responses stop.
@@ -803,7 +801,7 @@ class ClientPeriodicPingTest(WebSocketBaseTestCase):
     @gen_test
     def test_client_ping(self):
         ws = yield self.ws_connect("/", ping_interval=0.01)
-        for i in range(3):
+        for _ in range(3):
             response = yield ws.read_message()
             self.assertEqual(response, "got ping")
         # TODO: test that the connection gets closed if ping responses stop.
@@ -848,7 +846,7 @@ class MaxMessageSizeTest(WebSocketBaseTestCase):
         self.assertEqual(resp, msg)
 
         # Write a message that is too large.
-        ws.write_message(msg + "b")
+        ws.write_message(f"{msg}b")
         resp = yield ws.read_message()
         # A message of None means the other side closed the connection.
         self.assertIs(resp, None)
